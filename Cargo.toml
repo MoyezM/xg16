@@ -1,0 +1,19 @@
+[package]
+name = "xg16"
+version = "0.1.0"
+edition = "2024"
+description = "Vectorizable content-defined chunking with byte-granular cuts"
+
+[dependencies]
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

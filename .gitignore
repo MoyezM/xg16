@@ -1,0 +1,9 @@
+/target
+
+# direnv / nix dev shell state (machine-local)
+/.direnv/
+
+# profiling artifacts
+perf.data*
+flamegraph.svg
+*.folded
