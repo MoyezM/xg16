@@ -131,6 +131,21 @@ impl<'a> Xg16<'a> {
             offset: 0,
         }
     }
+
+    /// The configured minimum chunk size.
+    pub fn min_size(&self) -> usize {
+        self.config.min_size
+    }
+
+    /// The configured target (average) chunk size.
+    pub fn avg_size(&self) -> usize {
+        self.config.avg_size
+    }
+
+    /// The configured maximum chunk size.
+    pub fn max_size(&self) -> usize {
+        self.config.max_size
+    }
 }
 
 impl<'a> Iterator for Xg16<'a> {

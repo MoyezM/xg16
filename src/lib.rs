@@ -58,6 +58,13 @@
 //! }
 //! ```
 
+/// Identifies the chunking format: the table seed generation, state
+/// width, update rule, and mask construction. Manifests and stores that
+/// persist cut positions should record this identifier together with
+/// `(min_size, avg_size, max_size)`; a future algorithm revision will use
+/// a different identifier, never a silent change to this one.
+pub const FORMAT_ID: &str = "xg16/1";
+
 mod chunker;
 mod stream;
 mod table;
@@ -65,7 +72,7 @@ mod table;
 pub mod scan;
 
 pub use chunker::{Chunk, Xg16};
-pub use stream::{ChunkData, Error, StreamChunker};
+pub use stream::{ChunkData, Error, Feeder, StreamChunker};
 
 #[doc(hidden)]
 pub use chunker::Config;

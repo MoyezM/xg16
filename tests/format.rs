@@ -222,3 +222,94 @@ fn stream_matches_slice_chunking() {
         assert_eq!(g.data, &data[e.offset..e.offset + e.length]);
     }
 }
+
+/// The push-based Feeder must produce identical chunks to slice
+/// chunking, regardless of push sizes (the vold materializer delivers
+/// irregular pieces from mixed sources).
+#[test]
+fn feeder_matches_slice_chunking() {
+    let mut data = vec![0u8; 4 << 20];
+    fill_random(&mut data, 23);
+    let expected: Vec<xg16::Chunk> = Xg16::new(&data, MIN, AVG, MAX).collect();
+
+    let mut got: Vec<(xg16::Chunk, Vec<u8>)> = Vec::new();
+    let mut f = xg16::Feeder::new(MIN, AVG, MAX);
+    let mut seed = 777u64;
+    let mut off = 0usize;
+    while off < data.len() {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let n = match seed >> 60 {
+            0 => 1,
+            1 => 13,
+            2..=8 => (seed % 8192) as usize + 1,
+            _ => (seed % 250_000) as usize + 1,
+        };
+        let n = n.min(data.len() - off);
+        f.push(&data[off..off + n], |c, bytes| {
+            got.push((c, bytes.to_vec()))
+        });
+        off += n;
+    }
+    f.finish(|c, bytes| got.push((c, bytes.to_vec())));
+
+    assert_eq!(got.len(), expected.len());
+    for ((g, bytes), e) in got.iter().zip(&expected) {
+        assert_eq!(g, e);
+        assert_eq!(bytes, &data[e.offset..e.offset + e.length]);
+    }
+}
+
+/// Resync distance distribution at each parameter set, over many edit
+/// sites (vold consumes this as a dedup-efficiency price: resync bytes x
+/// edit count = upload waste per seal). A single edit site can land on a
+/// universally strong fire position and understate the spread.
+#[test]
+fn resync_distance_distribution() {
+    let mut data = vec![0u8; 8 << 20];
+    fill_random(&mut data, 7);
+    for (name, min, avg, max) in [
+        ("default", 2048usize, 8192usize, 65536usize),
+        ("vold8", 4096, 8192, 65536),
+        ("vold16", 4096, 16384, 65536),
+    ] {
+        let cut_points = |d: &[u8]| -> Vec<usize> {
+            Xg16::new(d, min, avg, max)
+                .map(|c| c.offset + c.length)
+                .collect()
+        };
+        let before = cut_points(&data);
+        let mut dists = Vec::new();
+        let mut seed = 0x5EEDu64;
+        for _ in 0..48 {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let edit_at = (seed % (6 << 20)) as usize + (1 << 20);
+            let ins_len = (seed >> 32) as usize % 61 + 1;
+            let ins: Vec<u8> = (0..ins_len).map(|i| (i as u8) ^ 0xA5).collect();
+            let mut edited = data[..edit_at].to_vec();
+            edited.extend_from_slice(&ins);
+            edited.extend_from_slice(&data[edit_at..]);
+            let after = cut_points(&edited);
+            let shifted: std::collections::HashSet<usize> =
+                before.iter().map(|&p| p + ins_len).collect();
+            let resync = after
+                .iter()
+                .copied()
+                .find(|p| *p > edit_at && shifted.contains(p))
+                .unwrap_or(usize::MAX);
+            let dist = resync.saturating_sub(edit_at);
+            assert!(
+                dist < 6 * max,
+                "{name} edit@{edit_at} +{ins_len}: resync {dist}"
+            );
+            dists.push(dist);
+        }
+        dists.sort_unstable();
+        let mean = dists.iter().sum::<usize>() / dists.len();
+        let p95 = dists[dists.len() * 95 / 100];
+        eprintln!(
+            "{name}: resync over 48 edits — mean {mean} B, median {} B, p95 {p95} B, max {} B",
+            dists[dists.len() / 2],
+            dists.last().unwrap()
+        );
+    }
+}

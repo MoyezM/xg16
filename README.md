@@ -73,8 +73,10 @@ dedup_ratio`):
 | 1 MiB append | 1.05 MB |
 
 Each edit costs one to two chunks of re-stored data, which is the
-behavior per-byte CDC exists to provide. Measured resync distance after
-an odd-length insert is about 6.4 KB.
+behavior per-byte CDC exists to provide. Resync distance measured over
+48 random edit sites: mean 4.9 KB / p95 9.1 KB at 8 KiB average, mean
+10.9 KB / p95 26 KB at 16 KiB average (resync scales with average chunk
+size).
 
 ## Usage
 
@@ -90,9 +92,21 @@ for chunk in Xg16::new(&data, 2048, 8192, 65536) {
 }
 ```
 
-For streams, `StreamChunker` wraps any `std::io::Read` and yields owned
-`Result<ChunkData, Error>` with bounded memory and cuts identical to
-slice chunking:
+For push-shaped producers (bytes arriving in irregular pieces from
+mixed or async sources), `Feeder` is the lower level; chunks are emitted
+with their bytes still cache-hot, which is where a content hash belongs:
+
+```rust
+use xg16::Feeder;
+
+let mut f = Feeder::new(2048, 8192, 65536);
+f.push(&piece, |chunk, bytes| { /* blake3::hash(bytes) ... */ });
+f.finish(|chunk, bytes| { /* ... */ });
+```
+
+For blocking `std::io::Read` sources, `StreamChunker` (built on
+`Feeder`) yields owned `Result<ChunkData, Error>` with bounded memory
+and cuts identical to slice chunking:
 
 ```rust
 use xg16::StreamChunker;
@@ -121,6 +135,14 @@ cut-for-cut, including the reported hash values.
     xg16 --min 4k --avg 16k ...   custom sizing
 
 ## Format stability
+
+`xg16::FORMAT_ID` names the format (table seed generation, state width,
+update rule, mask construction); systems persisting cut positions should
+record it alongside `(min, avg, max)`, which the chunker types echo via
+getters. Golden fixtures in `tests/data/` pin cut positions and hashes
+for a committed corpus across parameter sets; every kernel on every CI
+architecture is checked against them, and regenerating them
+(`XG16_BLESS=1`) is only legitimate together with a `FORMAT_ID` bump.
 
 Cut positions are an on-disk format for anything built on top of this
 crate. The table seed, the 16-bit width, the update rule, and the mask
