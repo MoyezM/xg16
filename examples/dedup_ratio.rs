@@ -9,7 +9,11 @@
 use std::collections::HashSet;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-use xg16::Chunker;
+use xg16::Xg16;
+
+const MIN: usize = 2 * 1024;
+const AVG: usize = 8 * 1024;
+const MAX: usize = 64 * 1024;
 
 fn fill_random(buf: &mut [u8], mut seed: u64) {
     let mut i = 0;
@@ -39,19 +43,19 @@ impl Rng {
     }
 }
 
-fn chunk_hashes(c: &Chunker, data: &[u8]) -> Vec<(u64, usize)> {
-    c.chunks(data)
-        .map(|ch| {
+fn chunk_hashes(data: &[u8]) -> Vec<(u64, usize)> {
+    Xg16::new(data, MIN, AVG, MAX)
+        .map(|c| {
             let mut h = DefaultHasher::new();
-            ch.hash(&mut h);
-            (h.finish(), ch.len())
+            data[c.offset..c.offset + c.length].hash(&mut h);
+            (h.finish(), c.length)
         })
         .collect()
 }
 
-fn scenario(name: &str, c: &Chunker, base: &[u8], edited: &[u8]) {
-    let base_set: HashSet<u64> = chunk_hashes(c, base).into_iter().map(|(h, _)| h).collect();
-    let v2 = chunk_hashes(c, edited);
+fn scenario(name: &str, base: &[u8], edited: &[u8]) {
+    let base_set: HashSet<u64> = chunk_hashes(base).into_iter().map(|(h, _)| h).collect();
+    let v2 = chunk_hashes(edited);
     let total: usize = v2.iter().map(|&(_, l)| l).sum();
     let new_bytes: usize = v2
         .iter()
@@ -70,13 +74,12 @@ fn main() {
     const LEN: usize = 32 << 20;
     let mut base = vec![0u8; LEN];
     fill_random(&mut base, 42);
-    let c = Chunker::with_default_sizes();
     let mut rng = Rng(7);
 
     println!("base: {} MiB, chunker 2K/8K/64K\n", LEN >> 20);
 
     // Identity: everything should dedup.
-    scenario("identical", &c, &base, &base.clone());
+    scenario("identical", &base, &base.clone());
 
     // One small odd-length insert mid-file.
     {
@@ -84,7 +87,7 @@ fn main() {
         let mut v = base[..at].to_vec();
         v.extend_from_slice(b"odd");
         v.extend_from_slice(&base[at..]);
-        scenario("1 insert of 3 B", &c, &base, &v);
+        scenario("1 insert of 3 B", &base, &v);
     }
 
     // One 1 KiB insert.
@@ -95,7 +98,7 @@ fn main() {
         let mut v = base[..at].to_vec();
         v.extend_from_slice(&ins);
         v.extend_from_slice(&base[at..]);
-        scenario("1 insert of 1 KiB", &c, &base, &v);
+        scenario("1 insert of 1 KiB", &base, &v);
     }
 
     // 20 scattered small inserts of random odd sizes (the edit-heavy
@@ -109,7 +112,7 @@ fn main() {
             let ins: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
             v.splice(at..at, ins);
         }
-        scenario("20 scattered inserts <64 B", &c, &base, &v);
+        scenario("20 scattered inserts <64 B", &base, &v);
     }
 
     // 100-byte deletion.
@@ -117,7 +120,7 @@ fn main() {
         let at = LEN / 4;
         let mut v = base.clone();
         v.drain(at..at + 100);
-        scenario("1 delete of 100 B", &c, &base, &v);
+        scenario("1 delete of 100 B", &base, &v);
     }
 
     // In-place 4 KiB rewrite at a 4K-aligned offset (VM-image model:
@@ -128,7 +131,7 @@ fn main() {
         let mut blk = vec![0u8; 4096];
         fill_random(&mut blk, 1234);
         v[at..at + 4096].copy_from_slice(&blk);
-        scenario("4 KiB aligned overwrite", &c, &base, &v);
+        scenario("4 KiB aligned overwrite", &base, &v);
     }
 
     // 1 MiB append.
@@ -137,6 +140,6 @@ fn main() {
         fill_random(&mut tail, 555);
         let mut v = base.clone();
         v.extend_from_slice(&tail);
-        scenario("1 MiB append", &c, &base, &v);
+        scenario("1 MiB append", &base, &v);
     }
 }

@@ -44,17 +44,19 @@
 
 //! ## Quick start
 //!
+//! The interface follows `fastcdc-rs`: [`Xg16`] iterates over
+//! [`Chunk`]s of an in-memory slice, [`StreamChunker`] wraps any
+//! [`std::io::Read`] and yields owned [`ChunkData`].
+//!
 //! ```
-//! use xg16::Chunker;
+//! use xg16::Xg16;
 //!
 //! let data: Vec<u8> = (0..100_000u32).flat_map(|i| i.to_le_bytes()).collect();
-//! let chunker = Chunker::with_default_sizes(); // 2K / 8K / 64K
-//! let total: usize = chunker.chunks(&data).map(|c| c.len()).sum();
-//! assert_eq!(total, data.len());
+//! for chunk in Xg16::new(&data, 2048, 8192, 65536) {
+//!     let bytes = &data[chunk.offset..chunk.offset + chunk.length];
+//!     assert!(!bytes.is_empty());
+//! }
 //! ```
-//!
-//! For input that arrives incrementally (or doesn't fit in memory), use
-//! [`StreamChunker`].
 
 mod chunker;
 mod stream;
@@ -62,5 +64,8 @@ mod table;
 
 pub mod scan;
 
-pub use chunker::{Chunker, Chunks};
-pub use stream::StreamChunker;
+pub use chunker::{Chunk, Xg16};
+pub use stream::{ChunkData, Error, StreamChunker};
+
+#[doc(hidden)]
+pub use chunker::Config;

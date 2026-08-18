@@ -10,7 +10,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use xg16::Chunker;
+use xg16::Xg16;
 
 const DIM: &str = "\x1b[2m";
 const BOLD: &str = "\x1b[1m";
@@ -70,11 +70,14 @@ struct FileStats {
     secs: f64,
 }
 
-fn chunk_file(chunker: &Chunker, data: &[u8]) -> FileStats {
+fn chunk_file(sizes: (usize, usize, usize), data: &[u8]) -> FileStats {
+    let (min, avg, max) = sizes;
     let t0 = Instant::now();
-    let lens: Vec<usize> = chunker.chunks(data).map(|c| c.len()).collect();
+    let lens: Vec<usize> = Xg16::new(data, min, avg, max).map(|c| c.length).collect();
     let secs = t0.elapsed().as_secs_f64();
-    let hashes: Vec<u64> = chunker.chunks(data).map(chunk_hash).collect();
+    let hashes: Vec<u64> = Xg16::new(data, min, avg, max)
+        .map(|c| chunk_hash(&data[c.offset..c.offset + c.length]))
+        .collect();
     FileStats {
         bytes: data.len(),
         lens,
@@ -143,7 +146,7 @@ fn print_histogram(lens: &[usize], min: usize, max: usize) {
     }
 }
 
-fn report_file(name: &str, st: &FileStats, chunker: &Chunker) {
+fn report_file(name: &str, st: &FileStats, sizes: (usize, usize, usize)) {
     let n = st.lens.len().max(1);
     let mean = st.bytes as f64 / n as f64;
     let lmin = *st.lens.iter().min().unwrap_or(&0);
@@ -165,7 +168,7 @@ fn report_file(name: &str, st: &FileStats, chunker: &Chunker) {
         human(lmin as f64),
         human(lmax as f64),
     );
-    print_histogram(&st.lens, chunker.min_size(), chunker.max_size());
+    print_histogram(&st.lens, sizes.0, sizes.2);
 
     // Self-dedup: repeated chunks within the file.
     let mut seen: HashMap<u64, usize> = HashMap::new();
@@ -184,20 +187,23 @@ fn report_file(name: &str, st: &FileStats, chunker: &Chunker) {
     }
 }
 
-fn compare(chunker: &Chunker, old_path: &Path, new_path: &Path) {
+fn compare(sizes: (usize, usize, usize), old_path: &Path, new_path: &Path) {
+    let (min, avg, max) = sizes;
     let old = std::fs::read(old_path).expect("read old");
     let new = std::fs::read(new_path).expect("read new");
-    let old_set: std::collections::HashSet<u64> = chunker.chunks(&old).map(chunk_hash).collect();
+    let old_set: std::collections::HashSet<u64> = Xg16::new(&old, min, avg, max)
+        .map(|c| chunk_hash(&old[c.offset..c.offset + c.length]))
+        .collect();
     let mut shared = 0usize;
     let mut fresh = 0usize;
     let mut fresh_chunks = 0usize;
     let mut total_chunks = 0usize;
-    for c in chunker.chunks(&new) {
+    for c in Xg16::new(&new, min, avg, max) {
         total_chunks += 1;
-        if old_set.contains(&chunk_hash(c)) {
-            shared += c.len();
+        if old_set.contains(&chunk_hash(&new[c.offset..c.offset + c.length])) {
+            shared += c.length;
         } else {
-            fresh += c.len();
+            fresh += c.length;
             fresh_chunks += 1;
         }
     }
@@ -258,7 +264,8 @@ fn main() {
         eprintln!("usage: xg16 [--min N] [--avg N] [--max N] [--compare] <path>...");
         std::process::exit(2);
     }
-    let chunker = Chunker::new(min, avg, max);
+    let sizes = (min, avg, max);
+    let _ = Xg16::new(&[], min, avg, max); // validate sizes up front
     println!(
         "{DIM}xg16 · min {} / avg {} / max {}{RESET}",
         human(min as f64),
@@ -268,7 +275,7 @@ fn main() {
 
     if do_compare {
         assert!(paths.len() == 2, "--compare needs exactly two files");
-        compare(&chunker, &paths[0], &paths[1]);
+        compare(sizes, &paths[0], &paths[1]);
         return;
     }
 
@@ -294,8 +301,8 @@ fn main() {
             Ok(d) if !d.is_empty() => d,
             _ => continue,
         };
-        let st = chunk_file(&chunker, &data);
-        report_file(&f.display().to_string(), &st, &chunker);
+        let st = chunk_file(sizes, &data);
+        report_file(&f.display().to_string(), &st, sizes);
         total_bytes += st.bytes;
         total_secs += st.secs;
         total_chunks += st.lens.len();

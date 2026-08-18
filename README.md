@@ -78,26 +78,36 @@ an odd-length insert is about 6.4 KB.
 
 ## Usage
 
+The interface follows fastcdc-rs. For in-memory data, `Xg16` iterates
+over `Chunk { hash, offset, length }`:
+
 ```rust
-use xg16::{Chunker, StreamChunker};
+use xg16::Xg16;
 
-let chunker = Chunker::new(2 * 1024, 8 * 1024, 64 * 1024);
-
-// Slice input:
-for chunk in chunker.chunks(&data) {
-    // hash/store chunk
+for chunk in Xg16::new(&data, 2048, 8192, 65536) {
+    let bytes = &data[chunk.offset..chunk.offset + chunk.length];
+    // hash/store bytes
 }
-
-// Streaming input (bounded memory, identical cuts):
-let mut s = StreamChunker::new(chunker);
-s.push(&piece, |chunk| { /* ... */ });
-s.finish(|chunk| { /* ... */ });
 ```
 
-The public API is `Chunker`, `Chunks`, and `StreamChunker`. The `scan`
-module exposes the kernels for tests and benchmarks; `scan::scan_ref`
-is the format definition, and the test suite pins every other kernel to
-it cut-for-cut.
+For streams, `StreamChunker` wraps any `std::io::Read` and yields owned
+`Result<ChunkData, Error>` with bounded memory and cuts identical to
+slice chunking:
+
+```rust
+use xg16::StreamChunker;
+
+for result in StreamChunker::new(reader, 2048, 8192, 65536) {
+    let chunk = result?; // ChunkData { hash, offset, length, data }
+}
+```
+
+`Chunk::hash` is the rolling-hash state at the cut, as in fastcdc-rs; it
+is a property of the boundary, not a content fingerprint — use a real
+hash (BLAKE3, SHA-256) for dedup identity. The `scan` module exposes the
+kernels for tests and benchmarks; `scan::scan_ref` is the format
+definition, and the test suite pins every other kernel to it
+cut-for-cut, including the reported hash values.
 
 ### CLI
 

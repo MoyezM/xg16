@@ -2,7 +2,7 @@
 //! data. Single core, 16 MiB buffers, default 2K/8K/64K sizing.
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
-use xg16::{Chunker, scan};
+use xg16::{Config, scan};
 
 const BUF_LEN: usize = 16 << 20;
 
@@ -40,7 +40,7 @@ fn bench(cr: &mut Criterion) {
     let mut random = vec![0u8; BUF_LEN];
     fill_random(&mut random, 0xC0FFEE);
     let text = text_like(BUF_LEN);
-    let c = Chunker::with_default_sizes();
+    let c = Config::new(2 * 1024, 8 * 1024, 64 * 1024);
 
     let kernels = scan::kernels();
 
@@ -53,7 +53,7 @@ fn bench(cr: &mut Criterion) {
                 b.iter(|| {
                     let mut off = 0;
                     while off < data.len() {
-                        off += c.next_cut_with(&data[off..], scan);
+                        off += c.cut_with(&data[off..], scan).0;
                     }
                     black_box(off)
                 })
